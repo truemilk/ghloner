@@ -22,14 +22,15 @@ type Processor struct {
 }
 
 type ProcessorStats struct {
-	startTime      time.Time
-	updatedRepos   int
-	newRepos       int
-	deletedRepos   int
-	skippedRepos   int
-	retriedSuccess int
-	retriedFailure int
-	printMutex     sync.Mutex
+	startTime         time.Time
+	updatedRepos      int
+	newRepos          int
+	deletedRepos      int
+	skippedRepos      int
+	cloneRetrySuccess int
+	fetchRetrySuccess int
+	retriedFailure    int
+	printMutex        sync.Mutex
 }
 
 func NewProcessor(client *github.Client, cfg *config.Config) *Processor {
@@ -186,12 +187,16 @@ func (p *Processor) runCommandWithRetry(cmd *exec.Cmd, repoName string, operatio
 				attempt, p.config.RetryCount, operation, repoName, err)
 			p.printMutex.Unlock()
 			time.Sleep(5 * time.Second)
-			cmd = exec.Command(cmd.Path, cmd.Args[1:]...) // Create a new command with the same arguments
+			cmd = exec.Command(cmd.Path, cmd.Args[1:]...)
 			continue
 		}
 		if attempt > 1 {
 			p.stats.printMutex.Lock()
-			p.stats.retriedSuccess++
+			if strings.Contains(operation, "cloning") {
+				p.stats.cloneRetrySuccess++
+			} else if strings.Contains(operation, "fetching") {
+				p.stats.fetchRetrySuccess++
+			}
 			p.stats.printMutex.Unlock()
 		}
 		return nil
@@ -280,6 +285,7 @@ func (p *Processor) printSummary() {
 	fmt.Printf("- Existing repositories updated: %d\n", p.stats.updatedRepos)
 	fmt.Printf("- Repositories deleted: %d\n", p.stats.deletedRepos)
 	fmt.Printf("- Repositories skipped: %d\n", p.stats.skippedRepos)
-	fmt.Printf("- Operations succeeded after retries: %d\n", p.stats.retriedSuccess)
+	fmt.Printf("- Clone operations succeeded after retries: %d\n", p.stats.cloneRetrySuccess)
+	fmt.Printf("- Fetch operations succeeded after retries: %d\n", p.stats.fetchRetrySuccess)
 	fmt.Printf("- Operations failed despite retries: %d\n", p.stats.retriedFailure)
 }
