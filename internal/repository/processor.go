@@ -278,6 +278,7 @@ func (p *Processor) printSummary() {
 	fmt.Printf("\nSummary:\n")
 	fmt.Printf("- New repositories cloned: %d\n", p.stats.newRepos)
 	fmt.Printf("- Existing repositories updated: %d\n", p.stats.updatedRepos)
+	fmt.Printf("- Repositories deleted: %d\n", p.stats.deletedRepos)
 	fmt.Printf("- Repositories skipped: %d\n", p.stats.skippedRepos)
 	fmt.Printf("- Operations succeeded after retries: %d\n", p.stats.retriedSuccess)
 	fmt.Printf("- Operations failed despite retries: %d\n", p.stats.retriedFailure)
