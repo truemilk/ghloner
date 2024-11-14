@@ -33,7 +33,8 @@ func NewConfig() *Config {
 
 	outputDir := os.Getenv("OUTPUT_DIR")
 	if outputDir == "" {
-		outputDir = "repos" // Default output directory
+		fmt.Println("Error: OUTPUT_DIR environment variable is not set")
+		os.Exit(1)
 	}
 
 	return &Config{
@@ -56,14 +57,19 @@ func Parse() (*Config, error) {
 	// Define flags
 	flag.StringVar(&cfg.OrgName, "org", os.Getenv("GITHUB_ORG"), "GitHub organization name")
 	flag.StringVar(&cfg.Token, "token", os.Getenv("GITHUB_TOKEN"), "GitHub personal access token")
-	flag.StringVar(&cfg.OutputDir, "output", cfg.OutputDir, "Output directory for cloned repositories")
+	flag.StringVar(&cfg.OutputDir, "output", os.Getenv("OUTPUT_DIR"), "Output directory for cloned repositories")
 	flag.IntVar(&cfg.Workers, "workers", cfg.Workers, "Number of concurrent workers")
 	flag.IntVar(&cfg.RetryCount, "retry", cfg.RetryCount, "Number of retry attempts")
 	flag.Parse()
-
 	// Validate required fields
-	if cfg.OrgName == "" || cfg.Token == "" {
-		return nil, fmt.Errorf("Error: org and token are required (via flags or GITHUB_ORG/GITHUB_TOKEN environment variables)")
+	if cfg.OrgName == "" {
+		return nil, fmt.Errorf("org is required (via --org flag or GITHUB_ORG environment variable)")
+	}
+	if cfg.Token == "" {
+		return nil, fmt.Errorf("token is required (via --token flag or GITHUB_TOKEN environment variable)") 
+	}
+	if cfg.OutputDir == "" {
+		return nil, fmt.Errorf("output directory is required (via --output flag or OUTPUT_DIR environment variable)")
 	}
 
 	// Create output directory if it doesn't exist
