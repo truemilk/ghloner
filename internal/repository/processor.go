@@ -22,14 +22,14 @@ type Processor struct {
 }
 
 type ProcessorStats struct {
-	startTime     time.Time
-	updatedRepos  int
-	newRepos      int
-	deletedRepos  int
-	skippedRepos  int
+	startTime      time.Time
+	updatedRepos   int
+	newRepos       int
+	deletedRepos   int
+	skippedRepos   int
 	retriedSuccess int
 	retriedFailure int
-	printMutex    sync.Mutex
+	printMutex     sync.Mutex
 }
 
 func NewProcessor(client *github.Client, cfg *config.Config) *Processor {
@@ -43,7 +43,7 @@ func NewProcessor(client *github.Client, cfg *config.Config) *Processor {
 }
 
 func (p *Processor) Run(ctx context.Context) error {
-	fmt.Printf("Starting processor with %d workers...\n", p.config.Workers)
+	fmt.Printf("Starting processor with %d workers and %d retries...\n", p.config.Workers, p.config.RetryCount)
 
 	// List all repositories
 	allRepos, err := p.listRepositories(ctx)
@@ -182,7 +182,7 @@ func (p *Processor) runCommandWithRetry(cmd *exec.Cmd, repoName string, operatio
 				return fmt.Errorf("%s\n%s", err, output)
 			}
 			p.printMutex.Lock()
-			fmt.Printf("Attempt %d/%d: Error %s %s: %v\nRetrying in 5 seconds...\n", 
+			fmt.Printf("Attempt %d/%d: Error %s %s: %v\nRetrying in 5 seconds...\n",
 				attempt, p.config.RetryCount, operation, repoName, err)
 			p.printMutex.Unlock()
 			time.Sleep(5 * time.Second)
