@@ -30,6 +30,10 @@ type ProcessorStats struct {
 	cloneRetrySuccess int
 	fetchRetrySuccess int
 	retriedFailure    int
+	newRepoNames      []string
+	updatedRepoNames  []string
+	deletedRepoNames  []string
+	skippedRepoNames  []string
 	printMutex        sync.Mutex
 }
 
@@ -133,6 +137,7 @@ func (p *Processor) cleanupOldRepositories(allRepos []*github.Repository) error 
 				}
 				p.stats.printMutex.Lock()
 				p.stats.deletedRepos++
+				p.stats.deletedRepoNames = append(p.stats.deletedRepoNames, entry.Name())
 				p.stats.printMutex.Unlock()
 			}
 		}
@@ -222,6 +227,7 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 			fmt.Printf("Warning: %s exists but is not a git repository. Skipping...\n", repoPath)
 			p.stats.printMutex.Lock()
 			p.stats.skippedRepos++
+			p.stats.skippedRepoNames = append(p.stats.skippedRepoNames, *repo.Name)
 			p.stats.printMutex.Unlock()
 			return
 		}
@@ -256,6 +262,7 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 		if len(diffOutput) > 0 {
 			p.stats.printMutex.Lock()
 			p.stats.updatedRepos++
+			p.stats.updatedRepoNames = append(p.stats.updatedRepoNames, *repo.Name)
 			p.stats.printMutex.Unlock()
 			fmt.Printf("Changes in %s:\n%s\n", *repo.Name, string(diffOutput))
 		} else {
@@ -271,6 +278,7 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 		}
 		p.stats.printMutex.Lock()
 		p.stats.newRepos++
+		p.stats.newRepoNames = append(p.stats.newRepoNames, *repo.Name)
 		p.stats.printMutex.Unlock()
 	} else {
 		// Some other error occurred
@@ -281,11 +289,28 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 
 func (p *Processor) printSummary() {
 	fmt.Printf("\nSummary:\n")
-	fmt.Printf("- New repositories cloned: %d\n", p.stats.newRepos)
-	fmt.Printf("- Existing repositories updated: %d\n", p.stats.updatedRepos)
-	fmt.Printf("- Repositories deleted: %d\n", p.stats.deletedRepos)
-	fmt.Printf("- Repositories skipped: %d\n", p.stats.skippedRepos)
-	fmt.Printf("- Clone operations succeeded after retries: %d\n", p.stats.cloneRetrySuccess)
+	
+	fmt.Printf("- New repositories cloned (%d):\n", p.stats.newRepos)
+	for _, name := range p.stats.newRepoNames {
+		fmt.Printf("  • %s\n", name)
+	}
+	
+	fmt.Printf("\n- Existing repositories updated (%d):\n", p.stats.updatedRepos)
+	for _, name := range p.stats.updatedRepoNames {
+		fmt.Printf("  • %s\n", name)
+	}
+	
+	fmt.Printf("\n- Repositories deleted (%d):\n", p.stats.deletedRepos)
+	for _, name := range p.stats.deletedRepoNames {
+		fmt.Printf("  • %s\n", name)
+	}
+	
+	fmt.Printf("\n- Repositories skipped (%d):\n", p.stats.skippedRepos)
+	for _, name := range p.stats.skippedRepoNames {
+		fmt.Printf("  • %s\n", name)
+	}
+	
+	fmt.Printf("\n- Clone operations succeeded after retries: %d\n", p.stats.cloneRetrySuccess)
 	fmt.Printf("- Fetch operations succeeded after retries: %d\n", p.stats.fetchRetrySuccess)
 	fmt.Printf("- Operations failed despite retries: %d\n", p.stats.retriedFailure)
 }
