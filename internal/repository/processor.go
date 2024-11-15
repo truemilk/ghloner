@@ -1,3 +1,4 @@
+// Package repository provides functionality for managing GitHub repositories.
 package repository
 
 import (
@@ -14,6 +15,8 @@ import (
 	"github.com/truemilk/ghloner/internal/config"
 )
 
+// Processor is a struct that manages the processing of GitHub repositories.
+// It contains a GitHub client, configuration, a mutex for printing, and statistics about the processing.
 type Processor struct {
 	client     *github.Client
 	config     *config.Config
@@ -21,6 +24,7 @@ type Processor struct {
 	stats      *ProcessorStats
 }
 
+// ProcessorStats contains statistics about the processing of GitHub repositories.
 type ProcessorStats struct {
 	startTime         time.Time
 	updatedRepos      int
@@ -38,6 +42,10 @@ type ProcessorStats struct {
 	printMutex        sync.Mutex
 }
 
+// NewProcessor creates a new Processor instance with the provided GitHub client and configuration.
+// The Processor is responsible for managing the processing of GitHub repositories, including
+// listing all repositories in an organization, saving the repository list, cleaning up old
+// repositories, and processing the repositories concurrently.
 func NewProcessor(client *github.Client, cfg *config.Config) *Processor {
 	return &Processor{
 		client: client,
@@ -48,6 +56,9 @@ func NewProcessor(client *github.Client, cfg *config.Config) *Processor {
 	}
 }
 
+// Run executes the processor, which lists all repositories in the configured organization,
+// saves the repository list, cleans up old repositories, and processes the repositories
+// concurrently. It prints a summary of the processing at the end.
 func (p *Processor) Run(ctx context.Context) error {
 	fmt.Printf("Starting processor with %d workers and %d retries...\n", p.config.Workers, p.config.RetryCount)
 
@@ -78,6 +89,8 @@ func (p *Processor) Run(ctx context.Context) error {
 	return nil
 }
 
+// listRepositories fetches all repositories for the configured organization using the GitHub API.
+// It handles pagination and returns a slice of all repositories found.
 func (p *Processor) listRepositories(ctx context.Context) ([]*github.Repository, error) {
 	opt := &github.RepositoryListByOrgOptions{
 		ListOptions: github.ListOptions{PerPage: 100},
@@ -99,6 +112,10 @@ func (p *Processor) listRepositories(ctx context.Context) ([]*github.Repository,
 	return allRepos, nil
 }
 
+// saveRepositoryList saves a list of all repositories in the configured organization to a file.
+// The file is saved in the configured output directory with the name "repository_list.txt".
+// Each line in the file contains the repository name and its SSH URL, separated by a hyphen.
+// The function returns an error if there is a problem creating or writing to the file.
 func (p *Processor) saveRepositoryList(allRepos []*github.Repository) error {
 	repoListPath := filepath.Join(p.config.OutputDir, "repository_list.txt")
 	f, err := os.Create(repoListPath)
@@ -117,6 +134,9 @@ func (p *Processor) saveRepositoryList(allRepos []*github.Repository) error {
 	return nil
 }
 
+// cleanupOldRepositories removes any directories in the configured output directory that
+// do not correspond to a repository that currently exists in the organization. This helps
+// keep the output directory clean and up-to-date.
 func (p *Processor) cleanupOldRepositories(allRepos []*github.Repository) error {
 	validRepos := make(map[string]bool)
 	for _, repo := range allRepos {
@@ -147,6 +167,10 @@ func (p *Processor) cleanupOldRepositories(allRepos []*github.Repository) error 
 	return nil
 }
 
+// processRepositories processes a list of GitHub repositories in parallel, using a semaphore to limit
+// the number of concurrent operations. It checks out each repository, and if the repository already
+// exists, it checks if it's a valid Git repository. If not, it skips the repository. The function
+// also creates a repository list file containing the repository names and SSH URLs.
 func (p *Processor) processRepositories(ctx context.Context, allRepos []*github.Repository) error {
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, p.config.Workers)
@@ -178,7 +202,10 @@ cleanup:
 	return nil
 }
 
-// Add a helper function for retrying commands
+// runCommandWithRetry is a helper function that runs the provided command and retries it up to the configured
+// number of times if an error occurs. It tracks the number of successful and failed retries in the Processor's
+// stats. If the maximum number of retries is reached and the command still fails, the function returns the
+// error along with the command's output.
 func (p *Processor) runCommandWithRetry(cmd *exec.Cmd, repoName string, operation string) error {
 	for attempt := 1; attempt <= p.config.RetryCount; attempt++ {
 		if output, err := cmd.CombinedOutput(); err != nil {
@@ -211,6 +238,16 @@ func (p *Processor) runCommandWithRetry(cmd *exec.Cmd, repoName string, operatio
 	return nil
 }
 
+// processRepository processes a single repository by either cloning it or fetching updates,
+// and prints a summary of the operations performed. It is called concurrently for each
+// repository to be processed.
+//
+// The function first checks if the repository directory exists. If it does, it checks if
+// it's a valid Git repository and fetches updates. If the directory doesn't exist, it
+// clones the repository.
+//
+// The function updates the Processor's stats to track the number of new, updated, deleted,
+// and skipped repositories, as well as the number of successful and failed retries.
 func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repository, index, total int) {
 	defer wg.Done()
 
@@ -289,6 +326,7 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 	}
 }
 
+// printSummary prints a summary of the repository processing operations, including the number of new repositories cloned, existing repositories updated, repositories deleted, repositories skipped, and operations that failed despite retries. It also prints the total time taken for the processing.
 func (p *Processor) printSummary() {
 	fmt.Printf("\nSummary:\n")
 

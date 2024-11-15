@@ -11,6 +11,8 @@ import (
 	"github.com/truemilk/ghloner/internal/repository"
 )
 
+// main is the entry point for the ghloner application. It sets up the GitHub client,
+// handles signal interrupts, and runs the processor to process GitHub repositories.
 func main() {
 	cfg, err := config.Parse()
 	if err != nil {
