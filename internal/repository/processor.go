@@ -34,6 +34,7 @@ type ProcessorStats struct {
 	updatedRepoNames  []string
 	deletedRepoNames  []string
 	skippedRepoNames  []string
+	failedRepoNames   []string
 	printMutex        sync.Mutex
 }
 
@@ -184,6 +185,7 @@ func (p *Processor) runCommandWithRetry(cmd *exec.Cmd, repoName string, operatio
 			if attempt == p.config.RetryCount {
 				p.stats.printMutex.Lock()
 				p.stats.retriedFailure++
+				p.stats.failedRepoNames = append(p.stats.failedRepoNames, repoName)
 				p.stats.printMutex.Unlock()
 				return fmt.Errorf("%s\n%s", err, output)
 			}
@@ -289,28 +291,34 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 
 func (p *Processor) printSummary() {
 	fmt.Printf("\nSummary:\n")
-	
+
 	fmt.Printf("- New repositories cloned (%d):\n", p.stats.newRepos)
 	for _, name := range p.stats.newRepoNames {
 		fmt.Printf("  • %s\n", name)
 	}
-	
+
 	fmt.Printf("\n- Existing repositories updated (%d):\n", p.stats.updatedRepos)
 	for _, name := range p.stats.updatedRepoNames {
 		fmt.Printf("  • %s\n", name)
 	}
-	
+
 	fmt.Printf("\n- Repositories deleted (%d):\n", p.stats.deletedRepos)
 	for _, name := range p.stats.deletedRepoNames {
 		fmt.Printf("  • %s\n", name)
 	}
-	
+
 	fmt.Printf("\n- Repositories skipped (%d):\n", p.stats.skippedRepos)
 	for _, name := range p.stats.skippedRepoNames {
 		fmt.Printf("  • %s\n", name)
 	}
-	
+
+	fmt.Printf("\n- Operations failed despite retries (%d):\n", p.stats.retriedFailure)
+	for _, name := range p.stats.failedRepoNames {
+		fmt.Printf("  • %s\n", name)
+	}
+
 	fmt.Printf("\n- Clone operations succeeded after retries: %d\n", p.stats.cloneRetrySuccess)
 	fmt.Printf("- Fetch operations succeeded after retries: %d\n", p.stats.fetchRetrySuccess)
-	fmt.Printf("- Operations failed despite retries: %d\n", p.stats.retriedFailure)
+
+	fmt.Printf("\nTotal time taken: %s\n", time.Since(p.stats.startTime))
 }
