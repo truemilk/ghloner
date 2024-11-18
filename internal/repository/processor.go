@@ -260,21 +260,9 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 
 	// Check if directory exists
 	if _, err := os.Stat(repoPath); err == nil {
-		// Directory exists, check if it's a git repo
-		cmd := exec.Command("git", "-C", repoPath, "rev-parse")
-		if err := cmd.Run(); err != nil {
-			fmt.Printf("Warning: %s exists but is not a git repository. Skipping...\n", repoPath)
-			p.stats.printMutex.Lock()
-			p.stats.skippedRepos++
-			p.stats.skippedRepoNames = append(p.stats.skippedRepoNames, *repo.Name)
-			p.stats.printMutex.Unlock()
-			return
-		}
-
-		// It's a git repo, fetch updates
-		fmt.Printf("Fetching updates for %s...\n", *repo.Name)
-		cmd = exec.Command("git", "-C", repoPath, "fetch", "--all")
-		if err := p.runCommandWithRetry(cmd, *repo.Name, "fetching updates for"); err != nil {
+		// Directory exists, fetch updates
+		fetchCmd := exec.Command("git", "-C", repoPath, "fetch", "--all")
+		if err := p.runCommandWithRetry(fetchCmd, *repo.Name, "fetching updates for"); err != nil {
 			fmt.Printf("Error fetching updates for %s: %v\n", *repo.Name, err)
 			return
 		}
@@ -288,22 +276,46 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 		}
 		branchName := strings.TrimSpace(string(branch))
 
-		// Show files that would be changed by pulling
-		diffCmd := exec.Command("git", "-C", repoPath, "diff", "--name-status",
-			fmt.Sprintf("HEAD..origin/%s", branchName))
-		diffOutput, err := diffCmd.Output()
+		// Get the current commit hash before fetch
+		beforeCmd := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD")
+		beforeHash, err := beforeCmd.Output()
 		if err != nil {
-			fmt.Printf("Error getting diff for %s: %v\n", *repo.Name, err)
+			fmt.Printf("Error getting current hash for %s: %v\n", *repo.Name, err)
 			return
 		}
 
-		// If there are changes, display them
-		if len(diffOutput) > 0 {
+		// Fetch updates
+		fmt.Printf("Fetching updates for %s...\n", *repo.Name)
+		fetchCmd = exec.Command("git", "-C", repoPath, "fetch", "origin", branchName)
+		if err := p.runCommandWithRetry(fetchCmd, *repo.Name, "fetching updates for"); err != nil {
+			fmt.Printf("Error fetching updates for %s: %v\n", *repo.Name, err)
+			return
+		}
+
+		// Get the remote commit hash
+		remoteCmd := exec.Command("git", "-C", repoPath, "rev-parse", fmt.Sprintf("origin/%s", branchName))
+		remoteHash, err := remoteCmd.Output()
+		if err != nil {
+			fmt.Printf("Error getting remote hash for %s: %v\n", *repo.Name, err)
+			return
+		}
+
+		// Compare the hashes
+		if string(beforeHash) != string(remoteHash) {
+			// Only if there are actual changes, pull them
+			pullCmd := exec.Command("git", "-C", repoPath, "pull", "origin", branchName)
+			if err := p.runCommandWithRetry(pullCmd, *repo.Name, "pulling updates for"); err != nil {
+				fmt.Printf("Error pulling updates for %s: %v\n", *repo.Name, err)
+				return
+			}
+
 			p.stats.printMutex.Lock()
 			p.stats.updatedRepos++
 			p.stats.updatedRepoNames = append(p.stats.updatedRepoNames, *repo.Name)
 			p.stats.printMutex.Unlock()
-			fmt.Printf("Changes in %s:\n%s\n", *repo.Name, string(diffOutput))
+			fmt.Printf("Updated %s from %s to %s\n", *repo.Name,
+				strings.TrimSpace(string(beforeHash))[:8],
+				strings.TrimSpace(string(remoteHash))[:8])
 		} else {
 			fmt.Printf("No changes in %s\n", *repo.Name)
 		}
@@ -337,7 +349,15 @@ func (p *Processor) printSummary() {
 
 	fmt.Printf("\n- Existing repositories updated (%d):\n", p.stats.updatedRepos)
 	for _, name := range p.stats.updatedRepoNames {
-		fmt.Printf("  • %s\n", name)
+		// Get the last commit hash
+		repoPath := filepath.Join(p.config.OutputDir, name)
+		cmd := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD")
+		hash, err := cmd.Output()
+		if err != nil {
+			fmt.Printf("  • %s (error getting hash: %v)\n", name, err)
+			continue
+		}
+		fmt.Printf("  • %s (%s)\n", name, strings.TrimSpace(string(hash)))
 	}
 
 	fmt.Printf("\n- Repositories deleted (%d):\n", p.stats.deletedRepos)
