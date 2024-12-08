@@ -258,6 +258,8 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 	repoPath := filepath.Join(p.config.OutputDir, *repo.Name)
 	cloneURL := fmt.Sprintf("git@github.com:%s/%s.git", p.config.OrgName, *repo.Name)
 
+	wasUpdated := false
+
 	// Check if directory exists
 	if _, err := os.Stat(repoPath); err == nil {
 		// Directory exists, fetch updates
@@ -316,6 +318,7 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 			fmt.Printf("Updated %s from %s to %s\n", *repo.Name,
 				strings.TrimSpace(string(beforeHash))[:8],
 				strings.TrimSpace(string(remoteHash))[:8])
+			wasUpdated = true
 		} else {
 			fmt.Printf("No changes in %s\n", *repo.Name)
 		}
@@ -331,10 +334,23 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 		p.stats.newRepos++
 		p.stats.newRepoNames = append(p.stats.newRepoNames, *repo.Name)
 		p.stats.printMutex.Unlock()
+		wasUpdated = true
 	} else {
 		// Some other error occurred
 		fmt.Printf("Error checking directory %s: %v\n", repoPath, err)
 		return
+	}
+
+	// Execute post-sync command if specified and the repository was cloned or updated
+	if p.config.PostSyncCommand != "" && wasUpdated {
+		fmt.Printf("Executing post-sync command for %s...\n", *repo.Name)
+		cmd := exec.Command("sh", "-c", p.config.PostSyncCommand)
+		cmd.Dir = repoPath // Set working directory to the repository
+		if output, err := cmd.CombinedOutput(); err != nil {
+			fmt.Printf("Error executing post-sync command for %s: %v\nOutput: %s\n", *repo.Name, err, output)
+		} else {
+			fmt.Printf("Post-sync command completed successfully for %s\n", *repo.Name)
+		}
 	}
 }
 

@@ -13,11 +13,12 @@ import (
 
 // Config holds the configuration settings for the application.
 type Config struct {
-	Token      string
-	OrgName    string
-	OutputDir  string
-	Workers    int
-	RetryCount int
+	Token           string
+	OrgName         string
+	OutputDir       string
+	Workers         int
+	RetryCount      int
+	PostSyncCommand string
 }
 
 // NewConfig creates a new Config instance by loading configuration values from environment variables.
@@ -68,6 +69,7 @@ func Parse() (*Config, error) {
 	flag.StringVar(&cfg.OutputDir, "output", os.Getenv("OUTPUT_DIR"), "Output directory for cloned repositories")
 	flag.IntVar(&cfg.Workers, "workers", cfg.Workers, "Number of concurrent workers")
 	flag.IntVar(&cfg.RetryCount, "retry", cfg.RetryCount, "Number of retry attempts")
+	flag.StringVar(&cfg.PostSyncCommand, "post-sync", "", "Command to execute after syncing each repository (executed in the repository directory)")
 	flag.Parse()
 	// Validate required fields
 	if cfg.OrgName == "" {
