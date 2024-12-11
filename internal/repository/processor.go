@@ -343,7 +343,7 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 
 	// Execute post-sync command if specified and the repository was cloned or updated
 	if p.config.PostSyncCommand != "" && wasUpdated {
-		fmt.Printf("Executing post-sync command for %s...\n", *repo.Name)
+		fmt.Printf("Executing post-sync command '%s' for %s...\n", p.config.PostSyncCommand, *repo.Name)
 		cmd := exec.Command("sh", "-c", p.config.PostSyncCommand)
 		cmd.Dir = repoPath // Set working directory to the repository
 		if output, err := cmd.CombinedOutput(); err != nil {
