@@ -349,7 +349,7 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 		if output, err := cmd.CombinedOutput(); err != nil {
 			fmt.Printf("Error executing post-sync command for %s: %v\nOutput: %s\n", *repo.Name, err, output)
 		} else {
-			fmt.Printf("Post-sync command completed successfully for %s\n", *repo.Name)
+			fmt.Printf("Post-sync command completed successfully for %s\nOutput: %s\n", *repo.Name, output)
 		}
 	}
 }
