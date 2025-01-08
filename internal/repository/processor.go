@@ -360,12 +360,18 @@ func (p *Processor) printSummary() {
 
 	fmt.Printf("- New repositories cloned (%d):\n", p.stats.newRepos)
 	for _, name := range p.stats.newRepoNames {
-		fmt.Printf("  • %s\n", name)
+		repoPath := filepath.Join(p.config.OutputDir, name)
+		cmd := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD")
+		hash, err := cmd.Output()
+		if err != nil {
+			fmt.Printf("  • %s (error getting hash: %v)\n", name, err)
+			continue
+		}
+		fmt.Printf("  • %s (%s)\n", name, strings.TrimSpace(string(hash)))
 	}
 
 	fmt.Printf("\n- Existing repositories updated (%d):\n", p.stats.updatedRepos)
 	for _, name := range p.stats.updatedRepoNames {
-		// Get the last commit hash
 		repoPath := filepath.Join(p.config.OutputDir, name)
 		cmd := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD")
 		hash, err := cmd.Output()
@@ -378,17 +384,31 @@ func (p *Processor) printSummary() {
 
 	fmt.Printf("\n- Repositories deleted (%d):\n", p.stats.deletedRepos)
 	for _, name := range p.stats.deletedRepoNames {
-		fmt.Printf("  • %s\n", name)
+		fmt.Printf("  • %s (deleted)\n", name)
 	}
 
 	fmt.Printf("\n- Repositories skipped (%d):\n", p.stats.skippedRepos)
 	for _, name := range p.stats.skippedRepoNames {
-		fmt.Printf("  • %s\n", name)
+		repoPath := filepath.Join(p.config.OutputDir, name)
+		cmd := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD")
+		hash, err := cmd.Output()
+		if err != nil {
+			fmt.Printf("  • %s (error getting hash: %v)\n", name, err)
+			continue
+		}
+		fmt.Printf("  • %s (%s)\n", name, strings.TrimSpace(string(hash)))
 	}
 
 	fmt.Printf("\n- Operations failed despite retries (%d):\n", p.stats.retriedFailure)
 	for _, name := range p.stats.failedRepoNames {
-		fmt.Printf("  • %s\n", name)
+		repoPath := filepath.Join(p.config.OutputDir, name)
+		cmd := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD")
+		hash, err := cmd.Output()
+		if err != nil {
+			fmt.Printf("  • %s (error getting hash: %v)\n", name, err)
+			continue
+		}
+		fmt.Printf("  • %s (%s)\n", name, strings.TrimSpace(string(hash)))
 	}
 
 	fmt.Printf("\n- Clone operations succeeded after retries: %d\n", p.stats.cloneRetrySuccess)
