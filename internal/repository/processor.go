@@ -1,4 +1,3 @@
-// Package repository provides functionality for managing GitHub repositories.
 package repository
 
 import (
@@ -15,8 +14,6 @@ import (
 	"github.com/truemilk/ghloner/internal/config"
 )
 
-// Processor is a struct that manages the processing of GitHub repositories.
-// It contains a GitHub client, configuration, a mutex for printing, and statistics about the processing.
 type Processor struct {
 	client     *github.Client
 	config     *config.Config
@@ -24,7 +21,6 @@ type Processor struct {
 	stats      *ProcessorStats
 }
 
-// ProcessorStats contains statistics about the processing of GitHub repositories.
 type ProcessorStats struct {
 	startTime         time.Time
 	updatedRepos      int
@@ -42,10 +38,6 @@ type ProcessorStats struct {
 	printMutex        sync.Mutex
 }
 
-// NewProcessor creates a new Processor instance with the provided GitHub client and configuration.
-// The Processor is responsible for managing the processing of GitHub repositories, including
-// listing all repositories in an organization, saving the repository list, cleaning up old
-// repositories, and processing the repositories concurrently.
 func NewProcessor(client *github.Client, cfg *config.Config) *Processor {
 	return &Processor{
 		client: client,
@@ -56,13 +48,9 @@ func NewProcessor(client *github.Client, cfg *config.Config) *Processor {
 	}
 }
 
-// Run executes the processor, which lists all repositories in the configured organization,
-// saves the repository list, cleans up old repositories, and processes the repositories
-// concurrently. It prints a summary of the processing at the end.
 func (p *Processor) Run(ctx context.Context) error {
 	fmt.Printf("Starting processor with %d workers and %d retries...\n", p.config.Workers, p.config.RetryCount)
 
-	// List all repositories
 	allRepos, err := p.listRepositories(ctx)
 	if err != nil {
 		return err
@@ -70,17 +58,14 @@ func (p *Processor) Run(ctx context.Context) error {
 
 	fmt.Printf("Found %d repositories in organization %s\n", len(allRepos), p.config.OrgName)
 
-	// Save repository list
 	if err := p.saveRepositoryList(allRepos); err != nil {
 		return err
 	}
 
-	// Clean up old repositories
 	if err := p.cleanupOldRepositories(allRepos); err != nil {
 		return err
 	}
 
-	// Process repositories concurrently
 	if err := p.processRepositories(ctx, allRepos); err != nil {
 		return err
 	}
@@ -89,8 +74,6 @@ func (p *Processor) Run(ctx context.Context) error {
 	return nil
 }
 
-// listRepositories fetches all repositories for the configured organization using the GitHub API.
-// It handles pagination and returns a slice of all repositories found.
 func (p *Processor) listRepositories(ctx context.Context) ([]*github.Repository, error) {
 	opt := &github.RepositoryListByOrgOptions{
 		ListOptions: github.ListOptions{PerPage: 100},
@@ -112,10 +95,6 @@ func (p *Processor) listRepositories(ctx context.Context) ([]*github.Repository,
 	return allRepos, nil
 }
 
-// saveRepositoryList saves a list of all repositories in the configured organization to a file.
-// The file is saved in the configured output directory with the name "repository_list.txt".
-// Each line in the file contains the repository name and its SSH URL, separated by a hyphen.
-// The function returns an error if there is a problem creating or writing to the file.
 func (p *Processor) saveRepositoryList(allRepos []*github.Repository) error {
 	repoListPath := filepath.Join(p.config.OutputDir, "repository_list.txt")
 	f, err := os.Create(repoListPath)
@@ -125,7 +104,8 @@ func (p *Processor) saveRepositoryList(allRepos []*github.Repository) error {
 	defer f.Close()
 
 	for _, repo := range allRepos {
-		if _, err := f.WriteString(fmt.Sprintf("%s - %s\n", *repo.Name, *repo.SSHURL)); err != nil {
+		httpsURL := fmt.Sprintf("https://github.com/%s/%s.git", p.config.OrgName, *repo.Name)
+		if _, err := f.WriteString(fmt.Sprintf("%s - %s\n", *repo.Name, httpsURL)); err != nil {
 			return fmt.Errorf("error writing to repository list file: %w", err)
 		}
 	}
@@ -134,9 +114,6 @@ func (p *Processor) saveRepositoryList(allRepos []*github.Repository) error {
 	return nil
 }
 
-// cleanupOldRepositories removes any directories in the configured output directory that
-// do not correspond to a repository that currently exists in the organization. This helps
-// keep the output directory clean and up-to-date.
 func (p *Processor) cleanupOldRepositories(allRepos []*github.Repository) error {
 	validRepos := make(map[string]bool)
 	for _, repo := range allRepos {
@@ -167,10 +144,6 @@ func (p *Processor) cleanupOldRepositories(allRepos []*github.Repository) error 
 	return nil
 }
 
-// processRepositories processes a list of GitHub repositories in parallel, using a semaphore to limit
-// the number of concurrent operations. It checks out each repository, and if the repository already
-// exists, it checks if it's a valid Git repository. If not, it skips the repository. The function
-// also creates a repository list file containing the repository names and SSH URLs.
 func (p *Processor) processRepositories(ctx context.Context, allRepos []*github.Repository) error {
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, p.config.Workers)
@@ -182,10 +155,10 @@ func (p *Processor) processRepositories(ctx context.Context, allRepos []*github.
 			goto cleanup
 		default:
 			wg.Add(1)
-			semaphore <- struct{}{} // Acquire semaphore
+			semaphore <- struct{}{}
 			go func(repo *github.Repository, index int) {
 				p.processRepository(&wg, repo, index, len(allRepos))
-				<-semaphore // Release semaphore
+				<-semaphore
 			}(repo, i)
 		}
 	}
@@ -202,10 +175,6 @@ cleanup:
 	return nil
 }
 
-// runCommandWithRetry is a helper function that runs the provided command and retries it up to the configured
-// number of times if an error occurs. It tracks the number of successful and failed retries in the Processor's
-// stats. If the maximum number of retries is reached and the command still fails, the function returns the
-// error along with the command's output.
 func (p *Processor) runCommandWithRetry(cmd *exec.Cmd, repoName string, operation string) error {
 	for attempt := 1; attempt <= p.config.RetryCount; attempt++ {
 		if output, err := cmd.CombinedOutput(); err != nil {
@@ -238,16 +207,6 @@ func (p *Processor) runCommandWithRetry(cmd *exec.Cmd, repoName string, operatio
 	return nil
 }
 
-// processRepository processes a single repository by either cloning it or fetching updates,
-// and prints a summary of the operations performed. It is called concurrently for each
-// repository to be processed.
-//
-// The function first checks if the repository directory exists. If it does, it checks if
-// it's a valid Git repository and fetches updates. If the directory doesn't exist, it
-// clones the repository.
-//
-// The function updates the Processor's stats to track the number of new, updated, deleted,
-// and skipped repositories, as well as the number of successful and failed retries.
 func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repository, index, total int) {
 	defer wg.Done()
 
@@ -256,20 +215,24 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 	p.printMutex.Unlock()
 
 	repoPath := filepath.Join(p.config.OutputDir, *repo.Name)
-	cloneURL := fmt.Sprintf("git@github.com:%s/%s.git", p.config.OrgName, *repo.Name)
+	cloneURL := fmt.Sprintf("https://%s@github.com/%s/%s.git", p.config.Token, p.config.OrgName, *repo.Name)
 
 	wasUpdated := false
 
-	// Check if directory exists
 	if _, err := os.Stat(repoPath); err == nil {
-		// Directory exists, fetch updates
+		remoteURL := fmt.Sprintf("https://%s@github.com/%s/%s.git", p.config.Token, p.config.OrgName, *repo.Name)
+		setURLCmd := exec.Command("git", "-C", repoPath, "remote", "set-url", "origin", remoteURL)
+		if err := p.runCommandWithRetry(setURLCmd, *repo.Name, "updating remote URL for"); err != nil {
+			fmt.Printf("Error updating remote URL for %s: %v\n", *repo.Name, err)
+			return
+		}
+
 		fetchCmd := exec.Command("git", "-C", repoPath, "fetch", "--all")
 		if err := p.runCommandWithRetry(fetchCmd, *repo.Name, "fetching updates for"); err != nil {
 			fmt.Printf("Error fetching updates for %s: %v\n", *repo.Name, err)
 			return
 		}
 
-		// Get the current branch
 		branchCmd := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
 		branch, err := branchCmd.Output()
 		if err != nil {
@@ -278,7 +241,6 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 		}
 		branchName := strings.TrimSpace(string(branch))
 
-		// Get the current commit hash before fetch
 		beforeCmd := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD")
 		beforeHash, err := beforeCmd.Output()
 		if err != nil {
@@ -286,7 +248,6 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 			return
 		}
 
-		// Fetch updates
 		fmt.Printf("Fetching updates for %s...\n", *repo.Name)
 		fetchCmd = exec.Command("git", "-C", repoPath, "fetch", "origin", branchName)
 		if err := p.runCommandWithRetry(fetchCmd, *repo.Name, "fetching updates for"); err != nil {
@@ -294,7 +255,6 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 			return
 		}
 
-		// Get the remote commit hash
 		remoteCmd := exec.Command("git", "-C", repoPath, "rev-parse", fmt.Sprintf("origin/%s", branchName))
 		remoteHash, err := remoteCmd.Output()
 		if err != nil {
@@ -302,9 +262,7 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 			return
 		}
 
-		// Compare the hashes
 		if string(beforeHash) != string(remoteHash) {
-			// Only if there are actual changes, pull them
 			pullCmd := exec.Command("git", "-C", repoPath, "pull", "origin", branchName)
 			if err := p.runCommandWithRetry(pullCmd, *repo.Name, "pulling updates for"); err != nil {
 				fmt.Printf("Error pulling updates for %s: %v\n", *repo.Name, err)
@@ -323,7 +281,6 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 			fmt.Printf("No changes in %s\n", *repo.Name)
 		}
 	} else if os.IsNotExist(err) {
-		// Directory doesn't exist, clone it
 		fmt.Printf("Cloning %s...\n", *repo.Name)
 		cmd := exec.Command("git", "clone", cloneURL, repoPath)
 		if err := p.runCommandWithRetry(cmd, *repo.Name, "cloning"); err != nil {
@@ -336,16 +293,14 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 		p.stats.printMutex.Unlock()
 		wasUpdated = true
 	} else {
-		// Some other error occurred
 		fmt.Printf("Error checking directory %s: %v\n", repoPath, err)
 		return
 	}
 
-	// Execute post-sync command if specified and the repository was cloned or updated
 	if p.config.PostSyncCommand != "" && wasUpdated {
 		fmt.Printf("Executing post-sync command '%s' for %s...\n", p.config.PostSyncCommand, *repo.Name)
 		cmd := exec.Command("sh", "-c", p.config.PostSyncCommand)
-		cmd.Dir = repoPath // Set working directory to the repository
+		cmd.Dir = repoPath
 		if output, err := cmd.CombinedOutput(); err != nil {
 			fmt.Printf("Error executing post-sync command for %s: %v\nOutput: %s\n", *repo.Name, err, output)
 		} else {
@@ -354,7 +309,6 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 	}
 }
 
-// printSummary prints a summary of the repository processing operations, including the number of new repositories cloned, existing repositories updated, repositories deleted, repositories skipped, and operations that failed despite retries. It also prints the total time taken for the processing.
 func (p *Processor) printSummary() {
 	fmt.Printf("\nSummary:\n")
 

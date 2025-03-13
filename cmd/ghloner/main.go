@@ -11,8 +11,6 @@ import (
 	"github.com/truemilk/ghloner/internal/repository"
 )
 
-// main is the entry point for the ghloner application. It sets up the GitHub client,
-// handles signal interrupts, and runs the processor to process GitHub repositories.
 func main() {
 	cfg, err := config.Parse()
 	if err != nil {
@@ -20,19 +18,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create GitHub client
 	client, err := config.NewGitHubClient(cfg.Token)
 	if err != nil {
 		fmt.Printf("Error creating GitHub client: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Set up signal handling
 	ctx, cancel := context.WithCancel(context.Background())
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
-	// Handle shutdown in a separate goroutine
 	go func() {
 		<-signalChan
 		fmt.Println("\nReceived interrupt signal. Gracefully shutting down...")
@@ -44,7 +39,6 @@ func main() {
 		os.Exit(1)
 	}()
 
-	// Create and run processor
 	processor := repository.NewProcessor(client, cfg)
 	if err := processor.Run(ctx); err != nil {
 		fmt.Printf("Error during processing: %v\n", err)
