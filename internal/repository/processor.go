@@ -12,6 +12,9 @@ import (
 
 	"github.com/google/go-github/v60/github"
 	"github.com/truemilk/ghloner/internal/config"
+
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
 type Processor struct {
@@ -215,7 +218,8 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 	p.printMutex.Unlock()
 
 	repoPath := filepath.Join(p.config.OutputDir, *repo.Name)
-	cloneURL := fmt.Sprintf("https://%s@github.com/%s/%s.git", p.config.Token, p.config.OrgName, *repo.Name)
+	// cloneURL := fmt.Sprintf("https://%s@github.com/%s/%s.git", p.config.Token, p.config.OrgName, *repo.Name)
+	cloneURLsmall := fmt.Sprintf("https://github.com/%s/%s.git", p.config.OrgName, *repo.Name)
 
 	wasUpdated := false
 
@@ -282,11 +286,25 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 		}
 	} else if os.IsNotExist(err) {
 		fmt.Printf("Cloning %s...\n", *repo.Name)
-		cmd := exec.Command("git", "clone", cloneURL, repoPath)
-		if err := p.runCommandWithRetry(cmd, *repo.Name, "cloning"); err != nil {
+		// cmd := exec.Command("git", "clone", cloneURL, repoPath)
+		// if err := p.runCommandWithRetry(cmd, *repo.Name, "cloning"); err != nil {
+		// 	fmt.Printf("Error cloning %s: %v\n", *repo.Name, err)
+		// 	return
+		// }
+
+		_, err := git.PlainClone(repoPath, false, &git.CloneOptions{
+			URL: cloneURLsmall,
+			Auth: &http.BasicAuth{
+				Username: "anything_except_an_empty_string",
+				Password: p.config.Token,
+			},
+		})
+
+		if err != nil {
 			fmt.Printf("Error cloning %s: %v\n", *repo.Name, err)
 			return
 		}
+
 		p.stats.printMutex.Lock()
 		p.stats.newRepos++
 		p.stats.newRepoNames = append(p.stats.newRepoNames, *repo.Name)

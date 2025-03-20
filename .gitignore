@@ -1,0 +1,21 @@
+# Exclude the ghloner executable in the root folder
+/ghloner
+
+# Go related
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/vendor/
+
+# IDE related
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS related
+.DS_Store
