@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,14 +15,17 @@ import (
 	"github.com/truemilk/ghloner/internal/config"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
 type Processor struct {
-	client     *github.Client
-	config     *config.Config
-	printMutex sync.Mutex
-	stats      *ProcessorStats
+	client       *github.Client
+	config       *config.Config
+	printMutex   sync.Mutex
+	stats        *ProcessorStats
+	repositories map[string]*git.Repository
+	repoMutex    sync.Mutex
 }
 
 type ProcessorStats struct {
@@ -43,8 +47,9 @@ type ProcessorStats struct {
 
 func NewProcessor(client *github.Client, cfg *config.Config) *Processor {
 	return &Processor{
-		client: client,
-		config: cfg,
+		client:       client,
+		config:       cfg,
+		repositories: make(map[string]*git.Repository),
 		stats: &ProcessorStats{
 			startTime: time.Now(),
 		},
@@ -178,22 +183,31 @@ cleanup:
 	return nil
 }
 
-func (p *Processor) runCommandWithRetry(cmd *exec.Cmd, repoName string, operation string) error {
+// runWithRetry executes a function with retry logic
+func (p *Processor) runWithRetry(repoName string, operation string, fn func() error) error {
 	for attempt := 1; attempt <= p.config.RetryCount; attempt++ {
-		if output, err := cmd.CombinedOutput(); err != nil {
+		if err := fn(); err != nil {
+			// Skip retries if the error is "remote repository is empty"
+			if strings.Contains(err.Error(), "remote repository is empty") {
+				p.stats.printMutex.Lock()
+				p.stats.retriedFailure++
+				p.stats.failedRepoNames = append(p.stats.failedRepoNames, repoName)
+				p.stats.printMutex.Unlock()
+				return fmt.Errorf("error %s %s: %w", operation, repoName, err)
+			}
+
 			if attempt == p.config.RetryCount {
 				p.stats.printMutex.Lock()
 				p.stats.retriedFailure++
 				p.stats.failedRepoNames = append(p.stats.failedRepoNames, repoName)
 				p.stats.printMutex.Unlock()
-				return fmt.Errorf("%s\n%s", err, output)
+				return fmt.Errorf("error %s %s: %w", operation, repoName, err)
 			}
 			p.printMutex.Lock()
 			fmt.Printf("Attempt %d/%d: Error %s %s: %v\nRetrying in 5 seconds...\n",
 				attempt, p.config.RetryCount, operation, repoName, err)
 			p.printMutex.Unlock()
 			time.Sleep(5 * time.Second)
-			cmd = exec.Command(cmd.Path, cmd.Args[1:]...)
 			continue
 		}
 		if attempt > 1 {
@@ -210,6 +224,128 @@ func (p *Processor) runCommandWithRetry(cmd *exec.Cmd, repoName string, operatio
 	return nil
 }
 
+// openRepository opens a git repository and caches it
+func (p *Processor) openRepository(repoPath string, repoName string) (*git.Repository, error) {
+	p.repoMutex.Lock()
+	defer p.repoMutex.Unlock()
+
+	if repo, ok := p.repositories[repoName]; ok {
+		return repo, nil
+	}
+
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("error opening repository: %w", err)
+	}
+
+	p.repositories[repoName] = repo
+	return repo, nil
+}
+
+// getRepositoryHead gets the current branch and commit hash
+func (p *Processor) getRepositoryHead(repo *git.Repository) (string, plumbing.Hash, error) {
+	ref, err := repo.Head()
+	if err != nil {
+		return "", plumbing.ZeroHash, fmt.Errorf("error getting HEAD: %w", err)
+	}
+
+	var branchName string
+	if ref.Name().IsBranch() {
+		branchName = ref.Name().Short()
+	} else {
+		// Detached HEAD state
+		branchName = "HEAD"
+	}
+
+	return branchName, ref.Hash(), nil
+}
+
+// updateRemoteURL updates the remote URL for a repository
+func (p *Processor) updateRemoteURL(repo *git.Repository, repoName string, remoteURL string) error {
+	remote, err := repo.Remote("origin")
+	if err != nil {
+		return fmt.Errorf("error getting remote: %w", err)
+	}
+
+	config := remote.Config()
+	config.URLs = []string{remoteURL}
+
+	if err := repo.DeleteRemote("origin"); err != nil {
+		return fmt.Errorf("error deleting remote: %w", err)
+	}
+
+	if _, err := repo.CreateRemote(config); err != nil {
+		return fmt.Errorf("error creating remote: %w", err)
+	}
+
+	return nil
+}
+
+// fetchRepository fetches updates from the remote
+func (p *Processor) fetchRepository(repo *git.Repository, repoName string) error {
+	return p.runWithRetry(repoName, "fetching updates for", func() error {
+		err := repo.Fetch(&git.FetchOptions{
+			RemoteName: "origin",
+			Auth: &http.BasicAuth{
+				Username: "anything_except_an_empty_string",
+				Password: p.config.Token,
+			},
+			Force: true,
+		})
+
+		if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
+			return fmt.Errorf("error fetching: %w", err)
+		}
+
+		return nil
+	})
+}
+
+// getRemoteHash gets the commit hash of a remote branch
+func (p *Processor) getRemoteHash(repo *git.Repository, branchName string) (plumbing.Hash, error) {
+	remoteBranchRef := plumbing.NewRemoteReferenceName("origin", branchName)
+	remoteRef, err := repo.Reference(remoteBranchRef, true)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("error getting remote reference: %w", err)
+	}
+
+	return remoteRef.Hash(), nil
+}
+
+// pullRepository pulls updates from the remote
+func (p *Processor) pullRepository(repo *git.Repository, repoName string, branchName string) error {
+	return p.runWithRetry(repoName, "pulling updates for", func() error {
+		w, err := repo.Worktree()
+		if err != nil {
+			return fmt.Errorf("error getting worktree: %w", err)
+		}
+
+		err = w.Pull(&git.PullOptions{
+			RemoteName: "origin",
+			Auth: &http.BasicAuth{
+				Username: "anything_except_an_empty_string",
+				Password: p.config.Token,
+			},
+		})
+
+		if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
+			return fmt.Errorf("error pulling: %w", err)
+		}
+
+		return nil
+	})
+}
+
+// getCommitHash gets the commit hash as a string
+func (p *Processor) getCommitHash(repo *git.Repository) (string, error) {
+	ref, err := repo.Head()
+	if err != nil {
+		return "", fmt.Errorf("error getting HEAD: %w", err)
+	}
+
+	return ref.Hash().String(), nil
+}
+
 func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repository, index, total int) {
 	defer wg.Done()
 
@@ -218,57 +354,50 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 	p.printMutex.Unlock()
 
 	repoPath := filepath.Join(p.config.OutputDir, *repo.Name)
-	// cloneURL := fmt.Sprintf("https://%s@github.com/%s/%s.git", p.config.Token, p.config.OrgName, *repo.Name)
-	cloneURLsmall := fmt.Sprintf("https://github.com/%s/%s.git", p.config.OrgName, *repo.Name)
+	cloneURL := fmt.Sprintf("https://github.com/%s/%s.git", p.config.OrgName, *repo.Name)
+	authURL := fmt.Sprintf("https://%s@github.com/%s/%s.git", p.config.Token, p.config.OrgName, *repo.Name)
 
 	wasUpdated := false
 
 	if _, err := os.Stat(repoPath); err == nil {
-		remoteURL := fmt.Sprintf("https://%s@github.com/%s/%s.git", p.config.Token, p.config.OrgName, *repo.Name)
-		setURLCmd := exec.Command("git", "-C", repoPath, "remote", "set-url", "origin", remoteURL)
-		if err := p.runCommandWithRetry(setURLCmd, *repo.Name, "updating remote URL for"); err != nil {
+		// Repository exists, update it
+		gitRepo, err := p.openRepository(repoPath, *repo.Name)
+		if err != nil {
+			fmt.Printf("Error opening repository %s: %v\n", *repo.Name, err)
+			return
+		}
+
+		// Update remote URL
+		if err := p.updateRemoteURL(gitRepo, *repo.Name, authURL); err != nil {
 			fmt.Printf("Error updating remote URL for %s: %v\n", *repo.Name, err)
 			return
 		}
 
-		fetchCmd := exec.Command("git", "-C", repoPath, "fetch", "--all")
-		if err := p.runCommandWithRetry(fetchCmd, *repo.Name, "fetching updates for"); err != nil {
-			fmt.Printf("Error fetching updates for %s: %v\n", *repo.Name, err)
-			return
-		}
-
-		branchCmd := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
-		branch, err := branchCmd.Output()
+		// Get current branch and hash
+		branchName, beforeHash, err := p.getRepositoryHead(gitRepo)
 		if err != nil {
 			fmt.Printf("Error getting current branch for %s: %v\n", *repo.Name, err)
 			return
 		}
-		branchName := strings.TrimSpace(string(branch))
 
-		beforeCmd := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD")
-		beforeHash, err := beforeCmd.Output()
-		if err != nil {
-			fmt.Printf("Error getting current hash for %s: %v\n", *repo.Name, err)
-			return
-		}
-
+		// Fetch updates
 		fmt.Printf("Fetching updates for %s...\n", *repo.Name)
-		fetchCmd = exec.Command("git", "-C", repoPath, "fetch", "origin", branchName)
-		if err := p.runCommandWithRetry(fetchCmd, *repo.Name, "fetching updates for"); err != nil {
+		if err := p.fetchRepository(gitRepo, *repo.Name); err != nil {
 			fmt.Printf("Error fetching updates for %s: %v\n", *repo.Name, err)
 			return
 		}
 
-		remoteCmd := exec.Command("git", "-C", repoPath, "rev-parse", fmt.Sprintf("origin/%s", branchName))
-		remoteHash, err := remoteCmd.Output()
+		// Get remote hash
+		remoteHash, err := p.getRemoteHash(gitRepo, branchName)
 		if err != nil {
 			fmt.Printf("Error getting remote hash for %s: %v\n", *repo.Name, err)
 			return
 		}
 
-		if string(beforeHash) != string(remoteHash) {
-			pullCmd := exec.Command("git", "-C", repoPath, "pull", "origin", branchName)
-			if err := p.runCommandWithRetry(pullCmd, *repo.Name, "pulling updates for"); err != nil {
+		// Check if there are changes
+		if beforeHash != remoteHash {
+			// Pull changes
+			if err := p.pullRepository(gitRepo, *repo.Name, branchName); err != nil {
 				fmt.Printf("Error pulling updates for %s: %v\n", *repo.Name, err)
 				return
 			}
@@ -278,31 +407,61 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 			p.stats.updatedRepoNames = append(p.stats.updatedRepoNames, *repo.Name)
 			p.stats.printMutex.Unlock()
 			fmt.Printf("Updated %s from %s to %s\n", *repo.Name,
-				strings.TrimSpace(string(beforeHash))[:8],
-				strings.TrimSpace(string(remoteHash))[:8])
+				beforeHash.String()[:8],
+				remoteHash.String()[:8])
 			wasUpdated = true
 		} else {
 			fmt.Printf("No changes in %s\n", *repo.Name)
 		}
 	} else if os.IsNotExist(err) {
+		// Repository doesn't exist, clone it
 		fmt.Printf("Cloning %s...\n", *repo.Name)
-		// cmd := exec.Command("git", "clone", cloneURL, repoPath)
-		// if err := p.runCommandWithRetry(cmd, *repo.Name, "cloning"); err != nil {
-		// 	fmt.Printf("Error cloning %s: %v\n", *repo.Name, err)
-		// 	return
-		// }
 
-		_, err := git.PlainClone(repoPath, false, &git.CloneOptions{
-			URL: cloneURLsmall,
-			Auth: &http.BasicAuth{
-				Username: "anything_except_an_empty_string",
-				Password: p.config.Token,
-			},
-		})
+		var cloneErr error
+		var attemptCount int
+		for attemptCount = 1; attemptCount <= p.config.RetryCount; attemptCount++ {
+			_, cloneErr = git.PlainClone(repoPath, false, &git.CloneOptions{
+				URL: cloneURL,
+				Auth: &http.BasicAuth{
+					Username: "anything_except_an_empty_string",
+					Password: p.config.Token,
+				},
+			})
 
-		if err != nil {
-			fmt.Printf("Error cloning %s: %v\n", *repo.Name, err)
-			return
+			if cloneErr == nil {
+				break
+			}
+
+			// Skip retries if the error is "remote repository is empty"
+			if strings.Contains(cloneErr.Error(), "remote repository is empty") {
+				fmt.Printf("Error cloning %s: %v (skipping retries for empty repository)\n", *repo.Name, cloneErr)
+				p.stats.printMutex.Lock()
+				p.stats.retriedFailure++
+				p.stats.failedRepoNames = append(p.stats.failedRepoNames, *repo.Name)
+				p.stats.printMutex.Unlock()
+				return
+			}
+
+			if attemptCount < p.config.RetryCount {
+				p.printMutex.Lock()
+				fmt.Printf("Attempt %d/%d: Error cloning %s: %v\nRetrying in 5 seconds...\n",
+					attemptCount, p.config.RetryCount, *repo.Name, cloneErr)
+				p.printMutex.Unlock()
+				time.Sleep(5 * time.Second)
+			} else {
+				fmt.Printf("Error cloning %s after %d attempts: %v\n", *repo.Name, p.config.RetryCount, cloneErr)
+				p.stats.printMutex.Lock()
+				p.stats.retriedFailure++
+				p.stats.failedRepoNames = append(p.stats.failedRepoNames, *repo.Name)
+				p.stats.printMutex.Unlock()
+				return
+			}
+		}
+
+		if attemptCount > 1 && cloneErr == nil {
+			p.stats.printMutex.Lock()
+			p.stats.cloneRetrySuccess++
+			p.stats.printMutex.Unlock()
 		}
 
 		p.stats.printMutex.Lock()
@@ -333,25 +492,35 @@ func (p *Processor) printSummary() {
 	fmt.Printf("- New repositories cloned (%d):\n", p.stats.newRepos)
 	for _, name := range p.stats.newRepoNames {
 		repoPath := filepath.Join(p.config.OutputDir, name)
-		cmd := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD")
-		hash, err := cmd.Output()
+		gitRepo, err := p.openRepository(repoPath, name)
+		if err != nil {
+			fmt.Printf("  • %s (error opening repository: %v)\n", name, err)
+			continue
+		}
+
+		hash, err := p.getCommitHash(gitRepo)
 		if err != nil {
 			fmt.Printf("  • %s (error getting hash: %v)\n", name, err)
 			continue
 		}
-		fmt.Printf("  • %s (%s)\n", name, strings.TrimSpace(string(hash)))
+		fmt.Printf("  • %s (%s)\n", name, hash)
 	}
 
 	fmt.Printf("\n- Existing repositories updated (%d):\n", p.stats.updatedRepos)
 	for _, name := range p.stats.updatedRepoNames {
 		repoPath := filepath.Join(p.config.OutputDir, name)
-		cmd := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD")
-		hash, err := cmd.Output()
+		gitRepo, err := p.openRepository(repoPath, name)
+		if err != nil {
+			fmt.Printf("  • %s (error opening repository: %v)\n", name, err)
+			continue
+		}
+
+		hash, err := p.getCommitHash(gitRepo)
 		if err != nil {
 			fmt.Printf("  • %s (error getting hash: %v)\n", name, err)
 			continue
 		}
-		fmt.Printf("  • %s (%s)\n", name, strings.TrimSpace(string(hash)))
+		fmt.Printf("  • %s (%s)\n", name, hash)
 	}
 
 	fmt.Printf("\n- Repositories deleted (%d):\n", p.stats.deletedRepos)
@@ -362,25 +531,40 @@ func (p *Processor) printSummary() {
 	fmt.Printf("\n- Repositories skipped (%d):\n", p.stats.skippedRepos)
 	for _, name := range p.stats.skippedRepoNames {
 		repoPath := filepath.Join(p.config.OutputDir, name)
-		cmd := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD")
-		hash, err := cmd.Output()
+		gitRepo, err := p.openRepository(repoPath, name)
+		if err != nil {
+			fmt.Printf("  • %s (error opening repository: %v)\n", name, err)
+			continue
+		}
+
+		hash, err := p.getCommitHash(gitRepo)
 		if err != nil {
 			fmt.Printf("  • %s (error getting hash: %v)\n", name, err)
 			continue
 		}
-		fmt.Printf("  • %s (%s)\n", name, strings.TrimSpace(string(hash)))
+		fmt.Printf("  • %s (%s)\n", name, hash)
 	}
 
 	fmt.Printf("\n- Operations failed despite retries (%d):\n", p.stats.retriedFailure)
 	for _, name := range p.stats.failedRepoNames {
 		repoPath := filepath.Join(p.config.OutputDir, name)
-		cmd := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD")
-		hash, err := cmd.Output()
+		if _, err := os.Stat(repoPath); os.IsNotExist(err) {
+			fmt.Printf("  • %s (repository does not exist)\n", name)
+			continue
+		}
+
+		gitRepo, err := p.openRepository(repoPath, name)
+		if err != nil {
+			fmt.Printf("  • %s (error opening repository: %v)\n", name, err)
+			continue
+		}
+
+		hash, err := p.getCommitHash(gitRepo)
 		if err != nil {
 			fmt.Printf("  • %s (error getting hash: %v)\n", name, err)
 			continue
 		}
-		fmt.Printf("  • %s (%s)\n", name, strings.TrimSpace(string(hash)))
+		fmt.Printf("  • %s (%s)\n", name, hash)
 	}
 
 	fmt.Printf("\n- Clone operations succeeded after retries: %d\n", p.stats.cloneRetrySuccess)
