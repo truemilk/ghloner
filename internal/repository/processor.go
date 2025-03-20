@@ -83,23 +83,123 @@ func (p *Processor) Run(ctx context.Context) error {
 }
 
 func (p *Processor) listRepositories(ctx context.Context) ([]*github.Repository, error) {
+	// Make initial request to get first page and determine total pages
 	opt := &github.RepositoryListByOrgOptions{
 		ListOptions: github.ListOptions{PerPage: 100},
 	}
 
-	var allRepos []*github.Repository
-	for {
-		repos, resp, err := p.client.Repositories.ListByOrg(ctx, p.config.OrgName, opt)
-		if err != nil {
-			return nil, fmt.Errorf("error fetching repositories: %w", err)
-		}
-		allRepos = append(allRepos, repos...)
-		if resp.NextPage == 0 {
-			break
-		}
-		opt.Page = resp.NextPage
+	// Get first page and determine total pages
+	firstPageRepos, resp, err := p.client.Repositories.ListByOrg(ctx, p.config.OrgName, opt)
+	if err != nil {
+		return nil, fmt.Errorf("error fetching first page of repositories: %w", err)
 	}
 
+	// If only one page, return immediately
+	if resp.NextPage == 0 {
+		return firstPageRepos, nil
+	}
+
+	// Determine total pages
+	totalPages := resp.LastPage
+	if totalPages == 0 {
+		// Calculate based on NextPage if LastPage is not available
+		totalPages = resp.NextPage
+	}
+
+	fmt.Printf("Found %d pages of repositories, fetching concurrently with %d workers...\n",
+		totalPages, p.config.Workers)
+
+	// Create channels for results and errors
+	type pageResult struct {
+		page  int
+		repos []*github.Repository
+		err   error
+	}
+	resultChan := make(chan pageResult, totalPages)
+
+	// Add first page results
+	resultChan <- pageResult{page: 1, repos: firstPageRepos}
+
+	// Create worker pool with size limited by config.Workers
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, p.config.Workers)
+
+	// Fetch remaining pages concurrently
+	for page := 2; page <= totalPages; page++ {
+		// Check if context is cancelled before starting a new goroutine
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+			// Continue with the next page
+		}
+
+		wg.Add(1)
+		semaphore <- struct{}{}
+
+		go func(pageNum int) {
+			defer wg.Done()
+			defer func() { <-semaphore }()
+
+			// Check context again inside goroutine
+			select {
+			case <-ctx.Done():
+				resultChan <- pageResult{page: pageNum, err: ctx.Err()}
+				return
+			default:
+				// Continue with the fetch
+			}
+
+			pageOpt := &github.RepositoryListByOrgOptions{
+				ListOptions: github.ListOptions{Page: pageNum, PerPage: 100},
+			}
+
+			repos, _, err := p.client.Repositories.ListByOrg(ctx, p.config.OrgName, pageOpt)
+			if err != nil {
+				resultChan <- pageResult{page: pageNum, err: err}
+				return
+			}
+
+			fmt.Printf("Fetched page %d of repositories\n", pageNum)
+			resultChan <- pageResult{page: pageNum, repos: repos}
+		}(page)
+	}
+
+	// Close result channel when all workers are done
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// Collect and combine results
+	var allRepos []*github.Repository
+	allRepos = append(allRepos, firstPageRepos...)
+
+	// Map to store results by page number for proper ordering
+	pageMap := make(map[int][]*github.Repository)
+
+	// Process results as they come in
+	for result := range resultChan {
+		if result.err != nil {
+			// If context was cancelled, return that error
+			if errors.Is(result.err, context.Canceled) || errors.Is(result.err, context.DeadlineExceeded) {
+				return nil, result.err
+			}
+			return nil, fmt.Errorf("error fetching page %d: %w", result.page, result.err)
+		}
+
+		// Store in map by page number
+		pageMap[result.page] = result.repos
+	}
+
+	// Combine results in correct order
+	for page := 2; page <= totalPages; page++ {
+		if repos, ok := pageMap[page]; ok {
+			allRepos = append(allRepos, repos...)
+		}
+	}
+
+	fmt.Printf("Successfully fetched all %d pages of repositories\n", totalPages)
 	return allRepos, nil
 }
 
@@ -349,9 +449,9 @@ func (p *Processor) getCommitHash(repo *git.Repository) (string, error) {
 func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repository, index, total int) {
 	defer wg.Done()
 
-	p.printMutex.Lock()
-	fmt.Printf("[%d/%d] ", index+1, total)
-	p.printMutex.Unlock()
+	// p.printMutex.Lock()
+	// fmt.Printf("[%d/%d] ", index+1, total)
+	// p.printMutex.Unlock()
 
 	repoPath := filepath.Join(p.config.OutputDir, *repo.Name)
 	cloneURL := fmt.Sprintf("https://github.com/%s/%s.git", p.config.OrgName, *repo.Name)
