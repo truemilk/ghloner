@@ -41,7 +41,7 @@ func main() {
 		cancel()
 
 		<-signalChan
-		slog.Info("\nForce quitting...")
+		slog.Info("Force quitting...")
 		os.Exit(1)
 	}()
 

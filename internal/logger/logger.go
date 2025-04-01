@@ -10,34 +10,16 @@ import (
 	"github.com/lmittmann/tint"
 )
 
-// Global logger instance
 var Log *slog.Logger
 
-// Init initializes the global logger with the specified level and format
 func Init(levelStr, format string) error {
-	// Parse log level
+
 	_, err := parseLogLevel(levelStr)
 	if err != nil {
 		return err
 	}
 	w := os.Stderr
 
-	// Create handler based on format
-	// var handler slog.Handler
-	// switch strings.ToLower(format) {
-	// case "json":
-	// 	handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-	// 		Level: level,
-	// 	})
-	// case "text", "":
-	// 	handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-	// 		Level: level,
-	// 	})
-	// default:
-	// 	return fmt.Errorf("unknown log format: %s", format)
-	// }
-
-	// Initialize global logger
 	Log = slog.New(tint.NewHandler(w, nil))
 	slog.SetDefault(slog.New(
 		tint.NewHandler(w, &tint.Options{
@@ -49,7 +31,6 @@ func Init(levelStr, format string) error {
 	return nil
 }
 
-// parseLogLevel converts a string level to a slog.Level
 func parseLogLevel(levelStr string) (slog.Level, error) {
 	switch strings.ToLower(levelStr) {
 	case "debug":

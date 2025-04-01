@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
 
 	"github.com/google/go-github/v60/github"
@@ -17,35 +16,6 @@ type Config struct {
 	OutputDir  string
 	Workers    int
 	RetryCount int
-}
-
-func NewConfig() *Config {
-
-	token := os.Getenv("GITHUB_TOKEN")
-	if token == "" {
-		slog.Error("GITHUB_TOKEN environment variable is not set")
-		os.Exit(1)
-	}
-
-	orgName := os.Getenv("GITHUB_ORG")
-	if orgName == "" {
-		slog.Error("GITHUB_ORG environment variable is not set")
-		os.Exit(1)
-	}
-
-	outputDir := os.Getenv("OUTPUT_DIR")
-	if outputDir == "" {
-		slog.Error("OUTPUT_DIR environment variable is not set")
-		os.Exit(1)
-	}
-
-	return &Config{
-		Token:      token,
-		OrgName:    orgName,
-		OutputDir:  outputDir,
-		Workers:    10,
-		RetryCount: 5,
-	}
 }
 
 func Parse() (*Config, error) {

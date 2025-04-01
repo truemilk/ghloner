@@ -61,6 +61,8 @@ func (p *Processor) Run(ctx context.Context) error {
 }
 
 func (p *Processor) listRepositories(ctx context.Context) ([]*github.Repository, error) {
+	startTime := time.Now()
+
 	opt := &github.RepositoryListByOrgOptions{
 		ListOptions: github.ListOptions{PerPage: 100},
 	}
@@ -158,7 +160,11 @@ func (p *Processor) listRepositories(ctx context.Context) ([]*github.Repository,
 		}
 	}
 
-	slog.Info("Successfully fetched all pages of repositories", "pages", totalPages)
+	endTime := time.Now()
+	elapsedTime := endTime.Sub(startTime)
+
+	slog.Info("Successfully fetched all pages of repositories", "pages", totalPages, "elapsed_time", elapsedTime)
+
 	return allRepos, nil
 }
 
@@ -406,15 +412,18 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 		}
 
 		if beforeHash != remoteHash {
+			startTime := time.Now()
 			if err := p.pullRepository(gitRepo, *repo.Name); err != nil {
 				slog.Error("Failed to pull updates", "repository", *repo.Name, "error", err)
 				return
 			}
+			endTime := time.Now()
 
 			slog.Info("Updated repository",
 				"repository", *repo.Name,
 				"from", beforeHash.String()[:8],
-				"to", remoteHash.String()[:8])
+				"to", remoteHash.String()[:8],
+				"elapsed_time", endTime.Sub(startTime))
 		} else {
 			// slog.Info("No changes in repository", "repository", *repo.Name)
 		}
@@ -422,6 +431,7 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 		var cloneErr error
 		var attemptCount int
 		for attemptCount = 1; attemptCount <= p.config.RetryCount; attemptCount++ {
+			startTime := time.Now()
 			_, cloneErr = git.PlainClone(repoPath, false, &git.CloneOptions{
 				URL: cloneURL,
 				Auth: &http.BasicAuth{
@@ -429,9 +439,10 @@ func (p *Processor) processRepository(wg *sync.WaitGroup, repo *github.Repositor
 					Password: p.config.Token,
 				},
 			})
+			endTime := time.Now()
 
 			if cloneErr == nil {
-				slog.Info("Cloned repository", "repository", *repo.Name)
+				slog.Info("Cloned repository", "repository", *repo.Name, "elapsed_time", endTime.Sub(startTime))
 				break
 			}
 
