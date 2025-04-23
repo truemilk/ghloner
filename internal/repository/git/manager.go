@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -80,7 +81,44 @@ func (m *Manager) updateRepository(repoPath, repoName, authURL, token string) er
 
 	if beforeHash != remoteHash {
 		startTime := time.Now()
-		if err := m.operations.PullRepository(gitRepo, repoName, token); err != nil {
+		err := m.operations.PullRepository(gitRepo, repoName, token)
+		
+		// Check for non-fast-forward error
+		var nonFastForwardErr *NonFastForwardError
+		if errors.As(err, &nonFastForwardErr) {
+			slog.Warn("Encountered non-fast-forward update error, will delete and re-clone repository",
+				"repository", repoName,
+				"error", err)
+			
+			// Close the repository to release any locks
+			m.repoMutex.Lock()
+			delete(m.repositories, repoName)
+			m.repoMutex.Unlock()
+			
+			// Delete the repository folder
+			slog.Info("Deleting repository folder", "repository", repoName, "path", repoPath)
+			if err := os.RemoveAll(repoPath); err != nil {
+				slog.Error("Failed to delete repository folder", "repository", repoName, "path", repoPath, "error", err)
+				return fmt.Errorf("error deleting repository folder: %w", err)
+			}
+			
+			// Clone the repository from scratch
+			cloneURL := strings.Replace(authURL, fmt.Sprintf("%s@", token), "", 1)
+			slog.Info("Re-cloning repository", "repository", repoName, "url", cloneURL)
+			
+			cloneStartTime := time.Now()
+			if err := m.cloneRepository(repoPath, cloneURL, repoName, token); err != nil {
+				slog.Error("Failed to re-clone repository", "repository", repoName, "error", err)
+				return err
+			}
+			cloneEndTime := time.Now()
+			
+			slog.Info("Successfully re-cloned repository after non-fast-forward error",
+				"repository", repoName,
+				"elapsed_time", cloneEndTime.Sub(cloneStartTime))
+				
+			return nil
+		} else if err != nil {
 			slog.Error("Failed to pull updates", "repository", repoName, "error", err)
 			return err
 		}

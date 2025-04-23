@@ -12,6 +12,22 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
+// NonFastForwardError represents a non-fast-forward update error
+type NonFastForwardError struct {
+	RepoName string
+	Err      error
+}
+
+// Error implements the error interface
+func (e *NonFastForwardError) Error() string {
+	return fmt.Sprintf("non-fast-forward update error for %s: %v", e.RepoName, e.Err)
+}
+
+// IsNonFastForwardError checks if an error is a non-fast-forward error
+func IsNonFastForwardError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "non-fast-forward update")
+}
+
 // Operations provides common Git operations
 type Operations struct {
 	retryCount int
@@ -136,7 +152,18 @@ func (o *Operations) PullRepository(repo *git.Repository, repoName, token string
 			},
 		})
 
-		if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
+		if err != nil {
+			if errors.Is(err, git.NoErrAlreadyUpToDate) {
+				return nil
+			}
+			
+			if IsNonFastForwardError(err) {
+				return &NonFastForwardError{
+					RepoName: repoName,
+					Err:      err,
+				}
+			}
+			
 			return fmt.Errorf("error pulling: %w", err)
 		}
 
