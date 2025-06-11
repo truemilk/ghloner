@@ -5,6 +5,7 @@ go 1.23.2
 require (
 	github.com/go-git/go-git/v5 v5.16.2
 	github.com/google/go-github/v60 v60.0.0
+	github.com/google/go-github/v72 v72.0.0
 	github.com/lmittmann/tint v1.1.2
 	golang.org/x/oauth2 v0.30.0
 )
