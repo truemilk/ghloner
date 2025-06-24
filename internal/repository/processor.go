@@ -9,6 +9,7 @@ import (
 	"github.com/truemilk/ghloner/internal/repository/concurrency"
 	"github.com/truemilk/ghloner/internal/repository/git"
 	repoGithub "github.com/truemilk/ghloner/internal/repository/github"
+	"github.com/truemilk/ghloner/internal/repository/progress"
 	"github.com/truemilk/ghloner/internal/repository/storage"
 )
 
@@ -56,11 +57,18 @@ func (p *Processor) Run(ctx context.Context) error {
 		return err
 	}
 
+	// Create progress tracker
+	showProgress := !p.config.NoProgress
+	progressTracker := progress.NewProgressTracker(len(allRepos), p.config.Workers, showProgress, p.config.ProgressStyle)
+	p.workerPool.SetProgressTracker(progressTracker)
+
 	// Process repositories
 	if err := p.processRepositories(ctx, allRepos); err != nil {
+		progressTracker.PrintSummary()
 		return err
 	}
 
+	progressTracker.PrintSummary()
 	slog.Info("Successfully processed repositories", "count", len(allRepos), "outputDir", p.config.OutputDir)
 	return nil
 }
