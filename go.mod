@@ -5,6 +5,7 @@ go 1.23.2
 require (
 	github.com/go-git/go-git/v5 v5.16.2
 	github.com/google/go-github/v60 v60.0.0
+	github.com/google/go-github/v73 v73.0.0
 	github.com/lmittmann/tint v1.1.2
 	github.com/schollz/progressbar/v3 v3.18.0
 	github.com/stretchr/testify v1.10.0
